@@ -229,6 +229,58 @@ def weight_matching(rng,
 
   return perm
 
+def weight_matching_custom_cost(rng,
+                                ps: PermutationSpec,
+                                params_a,
+                                params_b,
+                                fisher_a,
+                                fisher_b,
+                                max_iter=100,
+                                init_perm=None,
+                                silent=False):
+  """Weight matching with Fisher-weighted L2 cost (symmetric formulation)."""
+  perm_sizes = {p: params_a[axes[0][0]].shape[axes[0][1]] for p, axes in ps.perm_to_axes.items()}
+  perm = {p: jnp.arange(n) for p, n in perm_sizes.items()} if init_perm is None else init_perm
+  perm_names = list(perm.keys())
+
+  for iteration in range(max_iter):
+    progress = False
+    for p_ix in random.permutation(rngmix(rng, iteration), len(perm_names)):
+      p = perm_names[p_ix]
+      n = perm_sizes[p]
+      A = jnp.zeros((n, n))
+      for wk, axis in ps.perm_to_axes[p]:
+        w_a = params_a[wk]
+        w_b = get_permuted_param(ps, perm, wk, params_b, except_axis=axis)
+        f_a = fisher_a[wk]
+        f_b = get_permuted_param(ps, perm, wk, fisher_b, except_axis=axis)
+
+        w_a = jnp.moveaxis(w_a, axis, 0).reshape((n, -1))
+        w_b = jnp.moveaxis(w_b, axis, 0).reshape((n, -1))
+        f_a = jnp.moveaxis(f_a, axis, 0).reshape((n, -1))
+        f_b = jnp.moveaxis(f_b, axis, 0).reshape((n, -1))
+
+        # Fisher-weighted L2 (symmetric): 4 matmuls
+        A += (f_a * w_a) @ w_b.T          # F^A-weighted cross-term
+        A += w_a @ (f_b * w_b).T           # F^B-weighted cross-term
+        A -= 0.5 * f_a @ (w_b**2).T        # F^A penalty
+        A -= 0.5 * (w_a**2) @ f_b.T        # F^B penalty
+
+      ri, ci = linear_sum_assignment(A, maximize=True)
+      assert (ri == jnp.arange(len(ri))).all()
+
+      oldL = jnp.vdot(A, jnp.eye(n)[perm[p]])
+      newL = jnp.vdot(A, jnp.eye(n)[ci, :])
+      if not silent: print(f"{iteration}/{p}: {newL - oldL}")
+      progress = progress or newL > oldL + 1e-12
+
+      perm[p] = jnp.array(ci)
+
+    if not progress:
+      break
+
+  return perm
+
 def test_weight_matching():
   """If we just have a single hidden layer then it should converge after just one step."""
   ps = mlp_permutation_spec(num_hidden_layers=1)

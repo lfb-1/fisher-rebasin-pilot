@@ -101,25 +101,34 @@ def init_train_state(rng, model, learning_rate, num_epochs, batch_size, num_trai
   return TrainState.create(apply_fn=model.apply, params=vars["params"], tx=tx)
 
 if __name__ == "__main__":
+  import os
+
   parser = argparse.ArgumentParser()
   parser.add_argument("--test", action="store_true", help="Run in smoke-test mode")
   parser.add_argument("--seed", type=int, default=0, help="Random seed")
   parser.add_argument("--data-split", choices=["split1", "split2", "both"], required=True)
   parser.add_argument("--width-multiplier", type=int, default=1)
   parser.add_argument("--weight-decay", type=float, default=1e-4)
+  parser.add_argument("--checkpoint-dir", type=str, default=None,
+                      help="Save checkpoints to this directory (bypass wandb)")
+  parser.add_argument("--wandb-mode", type=str, default="online",
+                      choices=["online", "offline", "disabled"])
   args = parser.parse_args()
 
   with wandb.init(
       project="git-re-basin",
       entity="skainswo",
       tags=["cifar10", "resnet", "training"],
-      mode="disabled" if args.test else "online",
+      mode="disabled" if args.test else args.wandb_mode,
       job_type="train",
   ) as wandb_run:
     artifact = wandb.Artifact("cifar10-resnet-weights", type="model-weights")
 
     config = wandb.config
-    config.ec2_instance_type = ec2_get_instance_type()
+    try:
+      config.ec2_instance_type = ec2_get_instance_type()
+    except Exception:
+      config.ec2_instance_type = "unknown"
     config.test = args.test
     config.seed = args.seed
     config.data_split = args.data_split
@@ -198,6 +207,13 @@ if __name__ == "__main__":
           with open(filename, mode="wb") as f:
             f.write(flax.serialization.to_bytes(train_state.params))
           artifact.add_file(filename)
+
+      # Save to local checkpoint directory if specified
+      if args.checkpoint_dir and (epoch % 10 == 0 or epoch == config.num_epochs - 1):
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        filepath = os.path.join(args.checkpoint_dir, f"checkpoint{epoch}")
+        with open(filepath, "wb") as f:
+          f.write(flax.serialization.to_bytes(train_state.params))
 
     # This will be a no-op when config.test is enabled anyhow, since wandb will
     # be initialized with mode="disabled".

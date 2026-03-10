@@ -9,3 +9,9 @@ result*
 # wandb related
 artifacts/
 wandb/
+
+# Pilot study outputs
+pilot_checkpoints/
+pilot_fishers/
+pilot_results/
+__pycache__/
